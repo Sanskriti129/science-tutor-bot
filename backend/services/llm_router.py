@@ -96,13 +96,33 @@ def build_context_block(chunks):
     return "\n\n---\n\n".join(blocks)
 
 
-def ask_llm(question: str, chunks: list, chat_history: list = None):
-    """
-    question: the student's question
-    chunks: list of retrieved chunks from retriever.py (empty list if LOW_CONFIDENCE)
-    chat_history: list of {"role": "user"/"assistant", "content": "..."} for multi-turn memory
-    """
+# Optional answer styles the student can pick in the UI. "detailed" = the default prompt.
+STYLE_INSTRUCTIONS = {
+    "detailed": "",
+    "simple": (
+        "\n\nSTYLE FOR THIS ANSWER: The student wants a SIMPLE explanation. Use plain, "
+        "friendly language and one everyday analogy. Keep it short (roughly 150-200 words). "
+        "You may skip the Common Mistake section. Still end with the [Source: ...] line."
+    ),
+    "exam": (
+        "\n\nSTYLE FOR THIS ANSWER: The student is REVISING FOR AN EXAM. Give a crisp, "
+        "exam-ready answer: one-line definition, key points as short bullets, the key "
+        "formula(s), and for numericals the full Given/To Find/Formula/Solution/Answer "
+        "layout. No long prose. Still end with the [Source: ...] line."
+    ),
+}
 
+NO_NOTES_ANSWER = (
+    "I don't have reliable notes on this specific topic yet. "
+    "If this is from your Class 11/12 Physics, Chemistry, Mathematics, "
+    "or Biology syllabus, please check your textbook or ask about a "
+    "topic I have notes on."
+)
+EMPTY_INDEX_ANSWER = "My knowledge base is empty. Please run ingestion first."
+
+
+def build_messages(question: str, chunks: list, chat_history: list = None, style: str = "detailed"):
+    """Builds the full LangChain message list: system prompt, prior turns, then the question + context."""
     context_block = build_context_block(chunks)
 
     user_message = f"""CONTEXT FROM STUDENT'S NOTES:
@@ -111,7 +131,8 @@ def ask_llm(question: str, chunks: list, chat_history: list = None):
 STUDENT'S QUESTION:
 {question}"""
 
-    messages = [SystemMessage(content=SYSTEM_PROMPT)]
+    system = SYSTEM_PROMPT + STYLE_INSTRUCTIONS.get(style, "")
+    messages = [SystemMessage(content=system)]
 
     if chat_history:
         for turn in chat_history:
@@ -121,12 +142,47 @@ STUDENT'S QUESTION:
                 messages.append(HumanMessage(content=turn["content"]))
 
     messages.append(HumanMessage(content=user_message))
+    return messages
 
-    response = llm.invoke(messages)
 
+def ask_llm(question: str, chunks: list, chat_history: list = None, style: str = "detailed"):
+    """
+    question: the student's question
+    chunks: list of retrieved chunks from retriever.py (empty list if LOW_CONFIDENCE)
+    chat_history: list of {"role": "user"/"assistant", "content": "..."} for multi-turn memory
+    """
+    response = llm.invoke(build_messages(question, chunks, chat_history, style))
     return normalize_math_delimiters(response.content)
 
-def get_tutor_response(question: str, chat_history: list = None):
+
+def stream_tutor_response(question: str, chat_history: list = None, style: str = "detailed"):
+    """
+    Streaming version of get_tutor_response.
+    Yields ("sources", chunks) once, then ("token", text) pieces as the LLM writes.
+    Math delimiters are normalized on the frontend, since a \\[ ... \\] pair can
+    be split across tokens.
+    """
+    from retriever import retrieve
+
+    chunks, status = retrieve(question)
+
+    if status == "EMPTY_INDEX":
+        yield "sources", []
+        yield "token", EMPTY_INDEX_ANSWER
+        return
+
+    if status == "LOW_CONFIDENCE":
+        yield "sources", []
+        yield "token", NO_NOTES_ANSWER
+        return
+
+    yield "sources", chunks
+    for piece in llm.stream(build_messages(question, chunks, chat_history, style)):
+        if piece.content:
+            yield "token", piece.content
+
+
+def get_tutor_response(question: str, chat_history: list = None, style: str = "detailed"):
     """
     Full pipeline: retrieve real chunks, then ask LLM.
     This is what main.py / FastAPI will call.
@@ -136,18 +192,12 @@ def get_tutor_response(question: str, chat_history: list = None):
     chunks, status = retrieve(question)
 
     if status == "EMPTY_INDEX":
-        return "My knowledge base is empty. Please run ingestion first.", []
+        return EMPTY_INDEX_ANSWER, []
 
     if status == "LOW_CONFIDENCE":
-        answer = (
-            "I don't have reliable notes on this specific topic yet. "
-            "If this is from your Class 11/12 Physics, Chemistry, Mathematics, "
-            "or Biology syllabus, please check your textbook or ask about a "
-            "topic I have notes on."
-        )
-        return answer, []
+        return NO_NOTES_ANSWER, []
 
-    answer = ask_llm(question, chunks, chat_history)
+    answer = ask_llm(question, chunks, chat_history, style)
     return answer, chunks
 
 # ── test section ──────────────────────────────────────────
