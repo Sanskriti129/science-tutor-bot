@@ -1,0 +1,19 @@
+fastapi
+uvicorn
+python-dotenv
+pymupdf
+langchain
+langchain-community
+langchain-groq
+faiss-cpu
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+sentence-transformers
+openai
+google-generativeai
+anthropic
+groq
+sympy
+pint
+numpy
+python-multipart
