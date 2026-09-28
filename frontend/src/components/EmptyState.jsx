@@ -13,7 +13,7 @@ export default function EmptyState({ chapterCount, onPick }) {
       <div className="empty-mark" aria-hidden="true">
         <FlaskIcon width={28} height={28} />
       </div>
-      <h1>What are we learning today?</h1>
+      <h1>What are we learning <span className="grad">today?</span></h1>
       <p className="empty-sub">
         Ask a question, a numerical, or a derivation. Answers follow your
         textbook's method, step by step.
